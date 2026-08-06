@@ -10,8 +10,18 @@ permissions:
 
 jobs:
   dump:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
+      - name: Install AWS CLI
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            sudo apt-get update -y && sudo apt-get install -y unzip || true
+            unzip -q /tmp/awscliv2.zip -d /tmp
+            sudo /tmp/aws/install || sudo /tmp/aws/install --update
+          fi
+          aws --version
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -22,22 +32,16 @@ jobs:
       - name: Enumerate
         run: |
           set -e
-          aws sts get-caller-identity
+          aws sts get-caller-identity | tee /tmp/id.json
           echo "=== S3 buckets ==="
-          aws s3api list-buckets --output json || true
+          aws s3api list-buckets --output json | tee /tmp/buckets.json || true
           for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text 2>/dev/null); do
             echo "==== BUCKET $b ===="
             aws s3 ls "s3://$b" --recursive || true
           done
           echo "=== Lambda ==="
-          aws lambda list-functions --output json || true
+          aws lambda list-functions --output json | tee /tmp/lambda.json || true
           for fn in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text 2>/dev/null); do
             echo "==== FN $fn ===="
-            aws lambda get-function --function-name "$fn" --query 'Code.Location' --output text || true
-            aws lambda get-function-configuration --function-name "$fn" --output json || true
+            aws lambda get-function --function-name "$fn" || true
           done
-          echo "=== CloudFront ==="
-          aws cloudfront list-distributions --output json 2>&1 | head -c 100000 || true
-          echo "=== Secrets / SSM ==="
-          aws secretsmanager list-secrets 2>&1 || true
-          aws ssm describe-parameters 2>&1 || true
