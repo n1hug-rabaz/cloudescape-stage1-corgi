@@ -1,2 +1,1 @@
-﻿# cloudescape temporary OIDC assume helper - private CTF use
-trigger 2026-08-06T22:50:00.4979559+03:00
+readme 2026-08-06T22:54:19.9133770+03:00

