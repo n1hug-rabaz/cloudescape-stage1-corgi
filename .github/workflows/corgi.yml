@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   dump:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
